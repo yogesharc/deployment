@@ -29,8 +29,9 @@ Download the latest release: [Deployment_0.1.0_aarch64.dmg](https://github.com/y
 1. Click the menubar icon to open the panel
 2. Create a Vercel API token at [vercel.com/account/tokens](https://vercel.com/account/tokens)
 3. Paste the token in the app
-4. Select a team/account and project to view deployments
-5. Right-click the menubar icon for options (including Quit)
+4. **Note**: A password dialog will appear asking for keychain access - this is to securely store your Vercel token in macOS Keychain
+5. Select a team/account and project to view deployments
+6. Right-click the menubar icon for options (including Quit)
 
 ## Development
 
