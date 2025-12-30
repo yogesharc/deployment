@@ -107,19 +107,19 @@ export function DeploymentsList({ onOpenSettings }: Props) {
           const currentStatus = mapStatus(d.status);
 
           if (prevStatus && prevStatus !== currentStatus) {
-            console.log(`[Notification] Status changed for ${d.name}: ${prevStatus} -> ${currentStatus}`);
-            // Status changed - send notification
+            // Status changed - send notification with commit title and branch
+            const commitTitle = d.commitMessage || d.name;
+            const branchInfo = d.branch ? ` (${d.branch})` : '';
+
             if (currentStatus === 'READY' && prevStatus === 'BUILDING') {
-              console.log(`[Notification] Sending success notification for ${d.name}`);
               await invoke('send_deployment_notification', {
                 title: 'Deployment Successful',
-                body: `${d.name} deployed successfully`
+                body: `${commitTitle}${branchInfo}`
               });
             } else if (currentStatus === 'ERROR') {
-              console.log(`[Notification] Sending error notification for ${d.name}`);
               await invoke('send_deployment_notification', {
                 title: 'Deployment Failed',
-                body: `${d.name} deployment failed`
+                body: `${commitTitle}${branchInfo}`
               });
             }
           }
