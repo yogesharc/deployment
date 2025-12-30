@@ -1,20 +1,18 @@
 import { useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { KeyRound, ExternalLink, Loader2 } from 'lucide-react';
+import { KeyRound, ExternalLink, Loader2, Train, ChevronDown } from 'lucide-react';
+import type { Provider, Account } from '../types';
 
-interface User {
-  id: string;
-  email: string;
-  name: string | null;
-  username: string;
-}
+type RailwayTokenType = 'workspace' | 'project';
 
 interface AuthViewProps {
-  onSuccess: (user: User) => void;
+  onSuccess: (account: Account) => void;
 }
 
 export function AuthView({ onSuccess }: AuthViewProps) {
   const [token, setToken] = useState('');
+  const [provider, setProvider] = useState<Provider>('vercel');
+  const [railwayTokenType, setRailwayTokenType] = useState<RailwayTokenType>('workspace');
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -29,10 +27,21 @@ export function AuthView({ onSuccess }: AuthViewProps) {
     setIsSubmitting(true);
 
     try {
-      console.log('Saving token...');
-      const user = await invoke<User>('save_token', { token: token.trim() });
-      console.log('Token saved, user:', user);
-      onSuccess(user);
+      console.log(`Adding ${provider} account...`);
+      let account: Account;
+      if (provider === 'railway') {
+        account = await invoke<Account>('add_railway_account', {
+          token: token.trim(),
+          tokenType: railwayTokenType
+        });
+      } else {
+        account = await invoke<Account>('add_account', { token: token.trim() });
+      }
+
+      // Set as active account
+      await invoke('set_active_account', { accountId: account.id });
+      console.log('Account added:', account);
+      onSuccess(account);
     } catch (err) {
       console.error('Save token error:', err);
       setError(String(err));
@@ -40,9 +49,13 @@ export function AuthView({ onSuccess }: AuthViewProps) {
     }
   };
 
-  const openVercelTokens = async () => {
+  const openTokensPage = async () => {
     try {
-      await invoke('open_vercel_tokens');
+      if (provider === 'railway') {
+        await invoke('open_railway_tokens');
+      } else {
+        await invoke('open_vercel_tokens');
+      }
     } catch (err) {
       console.error('Failed to open tokens page:', err);
     }
@@ -62,7 +75,7 @@ export function AuthView({ onSuccess }: AuthViewProps) {
         flexDirection: 'column',
         justifyContent: 'center'
       }}>
-        <div style={{ textAlign: 'center', marginBottom: 32 }}>
+        <div style={{ textAlign: 'center', marginBottom: 24 }}>
           <div style={{
             display: 'inline-flex',
             alignItems: 'center',
@@ -73,15 +86,130 @@ export function AuthView({ onSuccess }: AuthViewProps) {
             backgroundColor: '#222',
             marginBottom: 16
           }}>
-            <KeyRound style={{ width: 32, height: 32, color: '#fff' }} />
+            {provider === 'railway' ? (
+              <Train style={{ width: 32, height: 32, color: '#fff' }} />
+            ) : (
+              <KeyRound style={{ width: 32, height: 32, color: '#fff' }} />
+            )}
           </div>
           <h1 style={{ fontSize: 20, fontWeight: 600, color: '#fff', marginBottom: 8 }}>
-            Connect to Vercel
+            Connect to {provider === 'railway' ? 'Railway' : 'Vercel'}
           </h1>
           <p style={{ fontSize: 14, color: '#888' }}>
             Enter your Personal Access Token to get started
           </p>
         </div>
+
+        {/* Provider Toggle */}
+        <div style={{
+          display: 'flex',
+          gap: 8,
+          marginBottom: 16,
+          padding: 4,
+          backgroundColor: '#1a1a1a',
+          borderRadius: 8,
+        }}>
+          <button
+            type="button"
+            onClick={() => setProvider('vercel')}
+            style={{
+              flex: 1,
+              padding: '8px 12px',
+              backgroundColor: provider === 'vercel' ? '#333' : 'transparent',
+              color: provider === 'vercel' ? '#fff' : '#888',
+              border: 'none',
+              borderRadius: 6,
+              cursor: 'pointer',
+              fontSize: 13,
+              fontWeight: 500,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 6,
+            }}
+          >
+            <svg width="14" height="14" viewBox="0 0 76 65" fill="currentColor">
+              <path d="M37.5274 0L75.0548 65H0L37.5274 0Z" />
+            </svg>
+            Vercel
+          </button>
+          <button
+            type="button"
+            onClick={() => setProvider('railway')}
+            style={{
+              flex: 1,
+              padding: '8px 12px',
+              backgroundColor: provider === 'railway' ? '#333' : 'transparent',
+              color: provider === 'railway' ? '#fff' : '#888',
+              border: 'none',
+              borderRadius: 6,
+              cursor: 'pointer',
+              fontSize: 13,
+              fontWeight: 500,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 6,
+            }}
+          >
+            <Train style={{ width: 14, height: 14 }} />
+            Railway
+          </button>
+        </div>
+
+        {/* Railway Token Type Selector */}
+        {provider === 'railway' && (
+          <div style={{ marginBottom: 16 }}>
+            <label style={{
+              display: 'block',
+              fontSize: 12,
+              color: '#888',
+              marginBottom: 8,
+            }}>
+              Token Type
+            </label>
+            <div style={{ position: 'relative' }}>
+              <select
+                value={railwayTokenType}
+                onChange={(e) => setRailwayTokenType(e.target.value as RailwayTokenType)}
+                style={{
+                  width: '100%',
+                  padding: '10px 36px 10px 12px',
+                  backgroundColor: '#222',
+                  border: '1px solid #333',
+                  borderRadius: 8,
+                  color: '#fff',
+                  fontSize: 14,
+                  appearance: 'none',
+                  cursor: 'pointer',
+                  outline: 'none',
+                }}
+              >
+                <option value="workspace">Workspace Token</option>
+                <option value="project">Project Token</option>
+              </select>
+              <ChevronDown style={{
+                position: 'absolute',
+                right: 12,
+                top: '50%',
+                transform: 'translateY(-50%)',
+                width: 16,
+                height: 16,
+                color: '#888',
+                pointerEvents: 'none',
+              }} />
+            </div>
+            <p style={{
+              fontSize: 11,
+              color: '#666',
+              marginTop: 6,
+            }}>
+              {railwayTokenType === 'workspace'
+                ? 'Workspace tokens access all workspace resources'
+                : 'Project tokens are scoped to a specific environment'}
+            </p>
+          </div>
+        )}
 
         <form onSubmit={handleSubmit}>
           <div style={{ marginBottom: 16 }}>
@@ -139,7 +267,7 @@ export function AuthView({ onSuccess }: AuthViewProps) {
 
       <div style={{ paddingTop: 16, borderTop: '1px solid #222' }}>
         <button
-          onClick={openVercelTokens}
+          onClick={openTokensPage}
           style={{
             width: '100%',
             padding: 8,
@@ -155,7 +283,7 @@ export function AuthView({ onSuccess }: AuthViewProps) {
           }}
         >
           <ExternalLink style={{ width: 16, height: 16 }} />
-          Create a token on Vercel
+          Create a token on {provider === 'railway' ? 'Railway' : 'Vercel'}
         </button>
       </div>
     </div>

@@ -28,3 +28,4 @@ chrono = { version = "0.4", features = ["serde"] }
 open = "5"
 window-vibrancy = "0.5"
 tauri-nspanel = { git = "https://github.com/ahkohd/tauri-nspanel", branch = "v2" }
+md5 = "0.7"

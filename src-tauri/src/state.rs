@@ -13,6 +13,12 @@ pub struct CachedAccount {
     pub team_name: Option<String>,
     pub team_slug: Option<String>,
     pub token: String,
+    #[serde(default = "default_provider")]
+    pub provider: String,
+}
+
+fn default_provider() -> String {
+    "vercel".to_string()
 }
 
 #[derive(Default)]
@@ -72,5 +78,12 @@ impl AppState {
 
     pub fn set_initialized(&self, val: bool) {
         *self.initialized.lock().unwrap() = val;
+    }
+
+    pub fn rename_account(&self, account_id: &str, new_name: &str) {
+        if let Some(account) = self.accounts.lock().unwrap().get_mut(account_id) {
+            account.name = Some(new_name.to_string());
+            account.username = new_name.to_string();
+        }
     }
 }

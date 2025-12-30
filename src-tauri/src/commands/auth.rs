@@ -2,6 +2,7 @@ use keyring::Entry;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, State};
 use crate::vercel::{self, User};
+use crate::railway;
 use crate::state::{AppState, CachedAccount};
 
 const SERVICE_NAME: &str = "vercel-menubar";
@@ -17,6 +18,12 @@ pub struct Account {
     pub scope_type: String,
     pub team_name: Option<String>,
     pub team_slug: Option<String>,
+    #[serde(default = "default_provider")]
+    pub provider: String,
+}
+
+fn default_provider() -> String {
+    "vercel".to_string()
 }
 
 impl From<CachedAccount> for Account {
@@ -29,6 +36,7 @@ impl From<CachedAccount> for Account {
             scope_type: c.scope_type,
             team_name: c.team_name,
             team_slug: c.team_slug,
+            provider: c.provider,
         }
     }
 }
@@ -52,6 +60,8 @@ struct StoredAccount {
     team_name: Option<String>,
     team_slug: Option<String>,
     token: String,
+    #[serde(default = "default_provider")]
+    provider: String,
 }
 
 fn get_keychain_entry() -> Result<Entry, String> {
@@ -105,6 +115,7 @@ pub async fn initialize_state(state: &AppState) -> Result<(), String> {
             team_name: stored.team_name,
             team_slug: stored.team_slug,
             token: stored.token,
+            provider: stored.provider,
         });
     }
 
@@ -124,6 +135,7 @@ fn save_state_to_keychain(state: &AppState) -> Result<(), String> {
         team_name: a.team_name,
         team_slug: a.team_slug,
         token: a.token,
+        provider: a.provider,
     }).collect();
 
     let data = KeychainData {
@@ -173,6 +185,7 @@ pub async fn add_account(token: String, state: State<'_, AppState>) -> Result<Ac
         team_name: team_name.clone(),
         team_slug: team_slug.clone(),
         token,
+        provider: "vercel".to_string(),
     };
     state.set_account(cached.clone());
     state.set_token(&user.id, &cached.token);
@@ -188,6 +201,7 @@ pub async fn add_account(token: String, state: State<'_, AppState>) -> Result<Ac
         scope_type,
         team_name,
         team_slug,
+        provider: "vercel".to_string(),
     })
 }
 
@@ -216,6 +230,20 @@ pub async fn remove_account(account_id: String, state: State<'_, AppState>) -> R
 
     // Remove from cache
     state.remove_token(&account_id);
+
+    // Save to keychain (single write)
+    save_state_to_keychain(&state)?;
+
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn rename_account(account_id: String, new_name: String, state: State<'_, AppState>) -> Result<(), String> {
+    // Initialize if needed
+    initialize_state(&state).await?;
+
+    // Update account name in cache
+    state.rename_account(&account_id, &new_name);
 
     // Save to keychain (single write)
     save_state_to_keychain(&state)?;
@@ -319,4 +347,97 @@ pub async fn get_current_account(state: State<'_, AppState>) -> Result<Option<Ac
 #[tauri::command]
 pub fn open_vercel_tokens(_app: AppHandle) {
     let _ = open::that("https://vercel.com/account/tokens");
+}
+
+#[tauri::command]
+pub fn open_railway_tokens(_app: AppHandle) {
+    let _ = open::that("https://railway.com/account/tokens");
+}
+
+#[tauri::command]
+pub async fn add_railway_account(token: String, token_type: String, state: State<'_, AppState>) -> Result<Account, String> {
+    // Initialize if needed
+    initialize_state(&state).await?;
+
+    let is_workspace_token = token_type == "workspace";
+
+    // Validate token by making API call with correct header based on token type
+    let client = railway::create_client_with_type(&token, &token_type)
+        .map_err(|e| format!("Failed to create client: {}", e))?;
+
+    // For workspace tokens, we use Bearer auth and verify by fetching projects
+    // For project tokens, we need to use Project-Access-Token header
+    let (account_id, username, email, name, workspace_name) = if is_workspace_token {
+        // Verify token works by fetching projects
+        let _projects = client
+            .list_projects(Some(1))
+            .await
+            .map_err(|e| format!("Invalid token: {}", e))?;
+
+        // Try to get workspace name
+        let workspace_name = match client.get_workspaces().await {
+            Ok(workspaces) => workspaces.first().map(|w| w.name.clone()),
+            Err(_) => None,
+        };
+
+        // Generate a unique ID based on token hash for workspace tokens
+        let token_hash = format!("{:x}", md5::compute(&token));
+        let short_hash = &token_hash[..8];
+        let display_name = workspace_name.clone().unwrap_or_else(|| "Railway Workspace".to_string());
+        (
+            format!("railway_ws_{}", short_hash),
+            display_name.clone(),
+            "workspace@railway.app".to_string(),
+            Some(display_name),
+            workspace_name,
+        )
+    } else {
+        // Project token - these are scoped to specific environments
+        // For now, verify by fetching projects (will only see the scoped project)
+        let projects = client
+            .list_projects(Some(1))
+            .await
+            .map_err(|e| format!("Invalid token: {}", e))?;
+
+        let project_name = projects.first().map(|p| p.name.clone());
+        let token_hash = format!("{:x}", md5::compute(&token));
+        let short_hash = &token_hash[..8];
+        let display_name = project_name.clone().unwrap_or_else(|| "Railway Project".to_string());
+        (
+            format!("railway_proj_{}", short_hash),
+            display_name.clone(),
+            "project@railway.app".to_string(),
+            Some(display_name),
+            project_name,
+        )
+    };
+
+    // Cache in memory
+    let cached = CachedAccount {
+        id: account_id.clone(),
+        username: username.clone(),
+        email: email.clone(),
+        name: name.clone(),
+        scope_type: if is_workspace_token { "workspace".to_string() } else { "project".to_string() },
+        team_name: workspace_name.clone(),
+        team_slug: None,
+        token,
+        provider: "railway".to_string(),
+    };
+    state.set_account(cached.clone());
+    state.set_token(&account_id, &cached.token);
+
+    // Save to keychain (single write)
+    save_state_to_keychain(&state)?;
+
+    Ok(Account {
+        id: account_id,
+        username,
+        email,
+        name,
+        scope_type: if is_workspace_token { "workspace".to_string() } else { "project".to_string() },
+        team_name: workspace_name,
+        team_slug: None,
+        provider: "railway".to_string(),
+    })
 }

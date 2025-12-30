@@ -1,53 +1,44 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { RefreshCw, Settings, GitBranch, Loader2 } from 'lucide-react';
+import { RefreshCw, Settings, GitBranch, Loader2, Train } from 'lucide-react';
 import './DeploymentsList.css';
 
-interface DeploymentCreator {
-  uid: string;
-  username?: string | null;
-  email?: string | null;
-}
-
-interface Deployment {
-  uid: string;
+// Unified deployment from backend
+interface UnifiedDeployment {
+  id: string;
+  provider: 'vercel' | 'railway';
   name: string;
-  url: string;
-  state: string | null;
-  readyState: string | null;
+  url: string | null;
+  status: string;
   createdAt: number | null;
-  meta: {
-    commitMessage?: string | null;
-    branch?: string | null;
-    githubCommitMessage?: string | null;
-    githubCommitRef?: string | null;
-  } | null;
-  creator?: DeploymentCreator | null;
+  commitMessage: string | null;
+  branch: string | null;
+  projectId: string | null;
+  serviceId: string | null;
+  gitAuthorLogin: string | null;
+  teamSlug: string | null;
 }
 
 interface Props {
-  urlSlug: string;
-  selectedProject: string;
   onOpenSettings: () => void;
 }
 
-function getState(d: Deployment): string {
-  return d.state || d.readyState || 'UNKNOWN';
+function mapStatus(status: string): string {
+  // Normalize status strings
+  const s = status.toUpperCase();
+  if (s === 'SUCCESS' || s === 'READY' || s === 'SLEEPING') return 'READY';
+  if (s === 'BUILDING' || s === 'DEPLOYING' || s === 'INITIALIZING') return 'BUILDING';
+  if (s === 'FAILED' || s === 'CRASHED' || s === 'ERROR') return 'ERROR';
+  if (s === 'QUEUED' || s === 'WAITING') return 'QUEUED';
+  if (s === 'CANCELED' || s === 'REMOVED' || s === 'REMOVING' || s === 'SKIPPED') return 'CANCELED';
+  return 'UNKNOWN';
 }
 
-function getCommitMessage(d: Deployment): string | null {
-  return d.meta?.commitMessage || d.meta?.githubCommitMessage || null;
-}
-
-function getBranch(d: Deployment): string | null {
-  return d.meta?.branch || d.meta?.githubCommitRef || null;
-}
-
-function getStatusColor(state: string): string {
-  switch (state) {
+function getStatusColor(status: string): string {
+  const s = mapStatus(status);
+  switch (s) {
     case 'READY': return '#22c55e';
     case 'BUILDING':
-    case 'INITIALIZING':
     case 'QUEUED': return '#eab308';
     case 'ERROR': return '#ef4444';
     case 'CANCELED': return '#525252';
@@ -67,29 +58,152 @@ function formatTime(ts: number | null): string {
   return `${days}d`;
 }
 
-export function DeploymentsList({ urlSlug, selectedProject, onOpenSettings }: Props) {
-  const [deployments, setDeployments] = useState<Deployment[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+function truncateBranch(branch: string, maxLength: number = 20): string {
+  if (branch.length <= maxLength) return branch;
+  return branch.substring(0, maxLength - 2) + '...';
+}
 
-  const fetchDeployments = async () => {
-    setIsLoading(true);
+const INITIAL_LIMIT = 8;
+const LOAD_MORE_INCREMENT = 8;
+const NORMAL_POLL_INTERVAL = 30000; // 30 seconds
+const BUILDING_POLL_INTERVAL = 10000; // 10 seconds when building
+
+export function DeploymentsList({ onOpenSettings }: Props) {
+  const [deployments, setDeployments] = useState<UnifiedDeployment[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [limit, setLimit] = useState(INITIAL_LIMIT);
+  const [hasMore, setHasMore] = useState(true);
+  const previousStatusRef = useRef<Map<string, string>>(new Map());
+  const isFirstFetchRef = useRef(true);
+  const limitRef = useRef(INITIAL_LIMIT); // Keep limit in ref to avoid stale closure
+  const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const hasBuildingRef = useRef(false);
+
+  const fetchDeployments = async (requestedLimit?: number, showLoadingMore: boolean = false) => {
+    const currentLimit = requestedLimit ?? limitRef.current;
+
+    // Only show full loading spinner on very first fetch
+    if (isFirstFetchRef.current) {
+      setIsLoading(true);
+    }
+    if (showLoadingMore) {
+      setIsLoadingMore(true);
+    }
     try {
-      const data = await invoke<Deployment[]>('list_deployments', {
-        projectId: selectedProject || null,
-        limit: 20
-      });
-      console.log('Deployments:', JSON.stringify(data, null, 2));
+      const data = await invoke<UnifiedDeployment[]>('list_all_deployments', { limit: currentLimit });
+      console.log('All Deployments:', JSON.stringify(data, null, 2));
+
+      // Check if there might be more deployments
+      setHasMore(data.length >= currentLimit);
+
+      // Check for status changes (only after first fetch)
+      if (!isFirstFetchRef.current) {
+        for (const d of data) {
+          const prevStatus = previousStatusRef.current.get(d.id);
+          const currentStatus = mapStatus(d.status);
+
+          if (prevStatus && prevStatus !== currentStatus) {
+            // Status changed - send notification
+            if (currentStatus === 'READY' && prevStatus === 'BUILDING') {
+              await invoke('send_deployment_notification', {
+                title: 'Deployment Successful',
+                body: `${d.name} deployed successfully`
+              });
+            } else if (currentStatus === 'ERROR') {
+              await invoke('send_deployment_notification', {
+                title: 'Deployment Failed',
+                body: `${d.name} deployment failed`
+              });
+            }
+          }
+
+          previousStatusRef.current.set(d.id, currentStatus);
+        }
+      } else {
+        // Initialize status map on first fetch
+        for (const d of data) {
+          previousStatusRef.current.set(d.id, mapStatus(d.status));
+        }
+        isFirstFetchRef.current = false;
+      }
+
       setDeployments(data);
+
+      // Update tray icon based on building status
+      const buildingDeployment = data.find(d => {
+        const s = mapStatus(d.status);
+        return s === 'BUILDING' || s === 'QUEUED';
+      });
+      const hasBuilding = !!buildingDeployment;
+      await invoke('update_tray_status', {
+        isBuilding: hasBuilding,
+        buildingProject: buildingDeployment?.name || null
+      });
+
+      // Adjust polling interval based on build status
+      if (hasBuilding !== hasBuildingRef.current) {
+        hasBuildingRef.current = hasBuilding;
+        setupPolling(hasBuilding ? BUILDING_POLL_INTERVAL : NORMAL_POLL_INTERVAL);
+      }
+
     } catch (err) {
       console.error('Failed to fetch deployments:', err);
     } finally {
       setIsLoading(false);
+      setIsLoadingMore(false);
     }
   };
 
+  const setupPolling = (interval: number) => {
+    if (pollIntervalRef.current) {
+      clearInterval(pollIntervalRef.current);
+    }
+    pollIntervalRef.current = setInterval(() => fetchDeployments(), interval);
+  };
+
+  const loadMore = () => {
+    const newLimit = limit + LOAD_MORE_INCREMENT;
+    setLimit(newLimit);
+    limitRef.current = newLimit;
+    fetchDeployments(newLimit, true);
+  };
+
   useEffect(() => {
-    fetchDeployments();
-  }, [selectedProject]);
+    fetchDeployments(INITIAL_LIMIT);
+    setupPolling(NORMAL_POLL_INTERVAL);
+
+    return () => {
+      if (pollIntervalRef.current) {
+        clearInterval(pollIntervalRef.current);
+      }
+    };
+  }, []);
+
+  const openDeployment = async (d: UnifiedDeployment) => {
+    let url: string;
+    if (d.provider === 'railway') {
+      url = 'https://railway.com/dashboard';
+      if (d.projectId) {
+        url = `https://railway.com/project/${d.projectId}`;
+      }
+    } else {
+      // Vercel - only open deployed URL if successful, otherwise open deployment page
+      const status = mapStatus(d.status);
+      if (status === 'READY' && d.url) {
+        url = d.url;
+      } else {
+        // Open the Vercel deployment page in dashboard: /team/project/deployment-id
+        url = `https://vercel.com/${d.teamSlug}/${d.name}/${d.id}`;
+      }
+    }
+    try {
+      const opener = await import('@tauri-apps/plugin-opener');
+      await opener.openUrl(url);
+    } catch {
+      window.open(url, '_blank');
+    }
+  };
 
   return (
     <div className="deployments-container">
@@ -97,13 +211,15 @@ export function DeploymentsList({ urlSlug, selectedProject, onOpenSettings }: Pr
       <div className="deployments-header">
         <span className="deployments-title">deployments</span>
 
-        <button className="icon-button" onClick={fetchDeployments}>
-          <RefreshCw style={{ width: 14, height: 14 }} />
-        </button>
+        <div style={{ marginLeft: 'auto', display: 'flex', gap: 4 }}>
+          <button className="icon-button" onClick={fetchDeployments}>
+            <RefreshCw style={{ width: 14, height: 14 }} />
+          </button>
 
-        <button className="icon-button" onClick={onOpenSettings}>
-          <Settings style={{ width: 14, height: 14 }} />
-        </button>
+          <button className="icon-button" onClick={onOpenSettings}>
+            <Settings style={{ width: 14, height: 14 }} />
+          </button>
+        </div>
       </div>
 
       {/* Deployments List */}
@@ -116,52 +232,52 @@ export function DeploymentsList({ urlSlug, selectedProject, onOpenSettings }: Pr
           <div className="empty-state">No deployments found</div>
         ) : (
           deployments.map(d => {
-            const state = getState(d);
-            const commitMsg = getCommitMessage(d);
-            const branch = getBranch(d);
-            const creatorUid = d.creator?.uid;
+            const status = mapStatus(d.status);
+            const isBuilding = status === 'BUILDING' || status === 'QUEUED';
             return (
               <div
-                key={d.uid}
+                key={`${d.provider}-${d.id}`}
                 className="deployment-item"
-                onClick={async () => {
-                  const url = `https://vercel.com/${urlSlug}/${d.name}/${d.uid.replace('dpl_', '')}`;
-                  try {
-                    const opener = await import('@tauri-apps/plugin-opener');
-                    await opener.openUrl(url);
-                  } catch {
-                    window.open(url, '_blank');
-                  }
-                }}
+                onClick={() => openDeployment(d)}
               >
                 {/* Row 1: Status indicator + Commit title + Time */}
                 <div className="deployment-row-1">
                   <span
                     className="status-dot"
                     style={{
-                      backgroundColor: getStatusColor(state),
-                      boxShadow: (state === 'BUILDING' || state === 'INITIALIZING' || state === 'QUEUED')
-                        ? `0 0 8px ${getStatusColor(state)}` : 'none',
+                      backgroundColor: getStatusColor(d.status),
+                      boxShadow: isBuilding ? `0 0 8px ${getStatusColor(d.status)}` : 'none',
                     }}
                   />
-                  <span className="commit-message">{commitMsg || d.name}</span>
+                  <span className="commit-message">{d.commitMessage || d.name}</span>
                   <span className="deploy-time">{formatTime(d.createdAt)}</span>
                 </div>
 
-                {/* Row 2: Branch + Deployment name + Avatar */}
+                {/* Row 2: Branch + Provider icon + Project name + Avatar */}
                 <div className="deployment-row-2">
-                  {branch && (
+                  {d.branch && (
                     <>
                       <GitBranch style={{ width: 10, height: 10 }} />
-                      <span>{branch}</span>
-                      <span className="separator">•</span>
+                      <span title={d.branch}>{truncateBranch(d.branch)}</span>
                     </>
                   )}
+
+                  {/* Provider icon before project name */}
+                  {d.provider === 'railway' ? (
+                    <Train style={{ width: 10, height: 10, color: '#a78bfa' }} />
+                  ) : (
+                    <svg width="10" height="10" viewBox="0 0 76 65" fill="#888">
+                      <path d="M37.5274 0L75.0548 65H0L37.5274 0Z" />
+                    </svg>
+                  )}
+
                   <span className="project-name">{d.name}</span>
-                  {creatorUid && (
+
+                  {/* Committer avatar (Vercel only, uses git author info) */}
+                  {d.gitAuthorLogin && (
                     <img
-                      src={`https://vercel.com/api/www/avatar/${creatorUid}?s=40`}
-                      alt="deployer"
+                      src={`https://github.com/${d.gitAuthorLogin}.png?s=40`}
+                      alt="committer"
                       className="avatar"
                       onError={(e) => {
                         (e.target as HTMLImageElement).style.display = 'none';
@@ -172,6 +288,21 @@ export function DeploymentsList({ urlSlug, selectedProject, onOpenSettings }: Pr
               </div>
             );
           })
+        )}
+
+        {/* Load More Button */}
+        {!isLoading && deployments.length > 0 && hasMore && (
+          <button
+            className="load-more-button"
+            onClick={loadMore}
+            disabled={isLoadingMore}
+          >
+            {isLoadingMore ? (
+              <Loader2 style={{ width: 14, height: 14, animation: 'spin 1s linear infinite' }} />
+            ) : (
+              'Load more'
+            )}
+          </button>
         )}
       </div>
     </div>

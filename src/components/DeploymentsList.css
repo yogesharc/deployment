@@ -107,7 +107,7 @@
 
 .deploy-time {
   font-size: 10px;
-  color: #404040;
+  color: #737373;
   flex-shrink: 0;
   font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
 }
@@ -117,7 +117,7 @@
   align-items: center;
   gap: 6px;
   font-size: 10px;
-  color: #404040;
+  color: #737373;
   padding-left: 14px;
   font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
 }
@@ -135,4 +135,33 @@
   height: 16px;
   border-radius: 50%;
   flex-shrink: 0;
+}
+
+.load-more-button {
+  width: 100%;
+  padding: 10px;
+  background-color: transparent;
+  border: none;
+  border-top: 1px solid rgba(255, 255, 255, 0.04);
+  color: #525252;
+  font-size: 11px;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s ease;
+}
+
+.load-more-button:hover:not(:disabled) {
+  background-color: rgba(255, 255, 255, 0.06);
+  color: #a3a3a3;
+}
+
+.load-more-button:active:not(:disabled) {
+  background-color: rgba(255, 255, 255, 0.1);
+}
+
+.load-more-button:disabled {
+  cursor: default;
 }

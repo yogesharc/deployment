@@ -1,10 +1,10 @@
 import { useEffect, useCallback, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { useStore } from '../store';
-import type { User } from '../types';
+import type { User, Account, Provider } from '../types';
 
 export function useAuth() {
-  const { user, isAuthenticated, isLoading, setUser, setLoading, setView, logout } = useStore();
+  const { user, isAuthenticated, isLoading, setUser, setLoading, setView, logout, currentAccount, setCurrentAccount } = useStore();
   const hasChecked = useRef(false);
 
   const checkAuth = useCallback(async () => {
@@ -13,9 +13,15 @@ export function useAuth() {
 
     setLoading(true);
     try {
-      const validatedUser = await invoke<User | null>('validate_stored_token');
-      if (validatedUser) {
-        setUser(validatedUser);
+      // First check for current account (provider-aware)
+      const account = await invoke<Account | null>('get_current_account');
+      if (account) {
+        setCurrentAccount(account);
+        // Also set legacy user for compatibility
+        const validatedUser = await invoke<User | null>('validate_stored_token');
+        if (validatedUser) {
+          setUser(validatedUser);
+        }
         setView('deployments');
       } else {
         setView('auth');
@@ -26,20 +32,37 @@ export function useAuth() {
     } finally {
       setLoading(false);
     }
-  }, [setUser, setLoading, setView]);
+  }, [setUser, setLoading, setView, setCurrentAccount]);
 
-  const saveToken = useCallback(async (token: string) => {
+  const saveToken = useCallback(async (token: string, provider: Provider = 'vercel') => {
     setLoading(true);
     try {
-      const validatedUser = await invoke<User>('save_token', { token });
-      setUser(validatedUser);
+      let account: Account;
+      if (provider === 'railway') {
+        account = await invoke<Account>('add_railway_account', { token });
+      } else {
+        account = await invoke<Account>('add_account', { token });
+      }
+
+      // Set as active account
+      await invoke('set_active_account', { accountId: account.id });
+      setCurrentAccount(account);
+
+      // Set legacy user for compatibility
+      setUser({
+        id: account.id,
+        email: account.email,
+        name: account.name,
+        username: account.username,
+      });
+
       setView('deployments');
       return { success: true };
     } catch (error) {
       setLoading(false);
       return { success: false, error: String(error) };
     }
-  }, [setUser, setLoading, setView]);
+  }, [setUser, setLoading, setView, setCurrentAccount]);
 
   const signOut = useCallback(async () => {
     try {
@@ -59,17 +82,27 @@ export function useAuth() {
     }
   }, []);
 
+  const openRailwayTokens = useCallback(async () => {
+    try {
+      await invoke('open_railway_tokens');
+    } catch (error) {
+      console.error('Failed to open Railway tokens page:', error);
+    }
+  }, []);
+
   useEffect(() => {
     checkAuth();
   }, [checkAuth]);
 
   return {
     user,
+    currentAccount,
     isAuthenticated,
     isLoading,
     saveToken,
     signOut,
     openVercelTokens,
+    openRailwayTokens,
     checkAuth,
   };
 }

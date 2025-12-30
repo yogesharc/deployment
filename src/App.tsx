@@ -5,45 +5,21 @@ import { AuthView } from './components/AuthView';
 import { DeploymentsList } from './components/DeploymentsList';
 import { Settings } from './components/Settings';
 import './App.css';
-
-interface User {
-  id: string;
-  email: string;
-  name: string | null;
-  username: string;
-}
-
-interface Account {
-  id: string;
-  username: string;
-  email: string;
-  name: string | null;
-  scopeType: string;
-  teamName: string | null;
-  teamSlug: string | null;
-}
+import type { Account } from './types';
 
 type View = 'deployments' | 'settings';
 
 function App() {
   const [isLoading, setIsLoading] = useState(true);
-  const [user, setUser] = useState<User | null>(null);
-  const [account, setAccount] = useState<Account | null>(null);
-  const [currentAccountId, setCurrentAccountId] = useState<string | null>(null);
-  const [selectedProject, setSelectedProject] = useState<string>('');
+  const [hasAccounts, setHasAccounts] = useState(false);
   const [view, setView] = useState<View>('deployments');
 
   useEffect(() => {
     const checkAuth = async () => {
       try {
-        const existingUser = await invoke<User | null>('validate_stored_token');
-        if (existingUser) {
-          setUser(existingUser);
-          setCurrentAccountId(existingUser.id);
-          // Get full account info including team slug
-          const currentAccount = await invoke<Account | null>('get_current_account');
-          setAccount(currentAccount);
-        }
+        // Check if we have any accounts
+        const accounts = await invoke<Account[]>('list_accounts');
+        setHasAccounts(accounts.length > 0);
       } catch (err) {
         console.error('Auth error:', err);
       } finally {
@@ -54,27 +30,8 @@ function App() {
     checkAuth();
   }, []);
 
-  const handleAuthSuccess = async (authenticatedUser: User) => {
-    setUser(authenticatedUser);
-    setCurrentAccountId(authenticatedUser.id);
-    // Get full account info
-    const currentAccount = await invoke<Account | null>('get_current_account');
-    setAccount(currentAccount);
-  };
-
-  const handleAccountChange = async (accountId: string) => {
-    setCurrentAccountId(accountId);
-    // Fetch user data for new account
-    try {
-      const userData = await invoke<User | null>('validate_stored_token');
-      if (userData) {
-        setUser(userData);
-      }
-      const currentAccount = await invoke<Account | null>('get_current_account');
-      setAccount(currentAccount);
-    } catch (err) {
-      console.error('Failed to switch account:', err);
-    }
+  const handleAuthSuccess = async () => {
+    setHasAccounts(true);
   };
 
   if (isLoading) {
@@ -93,7 +50,7 @@ function App() {
     );
   }
 
-  if (!user) {
+  if (!hasAccounts) {
     return <AuthView onSuccess={handleAuthSuccess} />;
   }
 
@@ -101,21 +58,12 @@ function App() {
     return (
       <Settings
         onBack={() => setView('deployments')}
-        selectedProject={selectedProject}
-        onProjectChange={setSelectedProject}
-        currentAccountId={currentAccountId}
-        onAccountChange={handleAccountChange}
       />
     );
   }
 
-  // Use team slug if available, otherwise use username
-  const urlSlug = account?.teamSlug || user.username;
-
   return (
     <DeploymentsList
-      urlSlug={urlSlug}
-      selectedProject={selectedProject}
       onOpenSettings={() => setView('settings')}
     />
   );

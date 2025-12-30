@@ -78,6 +78,8 @@ pub struct DeploymentMeta {
     pub commit_message: Option<String>,
     #[serde(default, rename = "githubCommitRef")]
     pub branch: Option<String>,
+    #[serde(default, rename = "githubCommitAuthorLogin")]
+    pub git_author_login: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -1,4 +1,5 @@
 mod commands;
+mod railway;
 mod state;
 mod tray;
 mod vercel;
@@ -94,16 +95,28 @@ pub fn run() {
             open_vercel_tokens,
             // Multi-account commands
             add_account,
+            add_railway_account,
             list_accounts,
             get_account_token,
             remove_account,
+            rename_account,
             get_active_account,
             set_active_account,
             get_current_account,
-            // Deployment commands
+            open_railway_tokens,
+            // Vercel deployment commands
             list_projects,
             list_deployments,
             get_deployment,
+            // Unified deployments (all providers)
+            list_all_deployments,
+            update_tray_status,
+            send_deployment_notification,
+            // Railway deployment commands
+            railway_verify_token,
+            railway_list_projects,
+            railway_list_deployments,
+            railway_get_deployment,
             // Log commands
             stream_deployment_logs,
             fetch_deployment_logs,
