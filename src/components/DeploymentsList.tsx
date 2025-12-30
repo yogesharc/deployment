@@ -65,13 +65,13 @@ function truncateBranch(branch: string, maxLength: number = 20): string {
 
 const INITIAL_LIMIT = 8;
 const LOAD_MORE_INCREMENT = 8;
-const NORMAL_POLL_INTERVAL = 30000; // 30 seconds
 const BUILDING_POLL_INTERVAL = 10000; // 10 seconds when building
 
 export function DeploymentsList({ onOpenSettings }: Props) {
   const [deployments, setDeployments] = useState<UnifiedDeployment[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [isFetching, setIsFetching] = useState(false);
   const [limit, setLimit] = useState(INITIAL_LIMIT);
   const [hasMore, setHasMore] = useState(true);
   const previousStatusRef = useRef<Map<string, string>>(new Map());
@@ -82,6 +82,9 @@ export function DeploymentsList({ onOpenSettings }: Props) {
 
   const fetchDeployments = async (requestedLimit?: number, showLoadingMore: boolean = false) => {
     const currentLimit = requestedLimit ?? limitRef.current;
+
+    // Track fetching state for refresh icon spinner
+    setIsFetching(true);
 
     // Only show full loading spinner on very first fetch
     if (isFirstFetchRef.current) {
@@ -104,13 +107,16 @@ export function DeploymentsList({ onOpenSettings }: Props) {
           const currentStatus = mapStatus(d.status);
 
           if (prevStatus && prevStatus !== currentStatus) {
+            console.log(`[Notification] Status changed for ${d.name}: ${prevStatus} -> ${currentStatus}`);
             // Status changed - send notification
             if (currentStatus === 'READY' && prevStatus === 'BUILDING') {
+              console.log(`[Notification] Sending success notification for ${d.name}`);
               await invoke('send_deployment_notification', {
                 title: 'Deployment Successful',
                 body: `${d.name} deployed successfully`
               });
             } else if (currentStatus === 'ERROR') {
+              console.log(`[Notification] Sending error notification for ${d.name}`);
               await invoke('send_deployment_notification', {
                 title: 'Deployment Failed',
                 body: `${d.name} deployment failed`
@@ -141,10 +147,18 @@ export function DeploymentsList({ onOpenSettings }: Props) {
         buildingProject: buildingDeployment?.name || null
       });
 
-      // Adjust polling interval based on build status
+      // Only poll when building, otherwise stop polling
       if (hasBuilding !== hasBuildingRef.current) {
         hasBuildingRef.current = hasBuilding;
-        setupPolling(hasBuilding ? BUILDING_POLL_INTERVAL : NORMAL_POLL_INTERVAL);
+        if (hasBuilding) {
+          setupPolling(BUILDING_POLL_INTERVAL);
+        } else {
+          // Stop polling when not building
+          if (pollIntervalRef.current) {
+            clearInterval(pollIntervalRef.current);
+            pollIntervalRef.current = null;
+          }
+        }
       }
 
     } catch (err) {
@@ -152,6 +166,7 @@ export function DeploymentsList({ onOpenSettings }: Props) {
     } finally {
       setIsLoading(false);
       setIsLoadingMore(false);
+      setIsFetching(false);
     }
   };
 
@@ -170,13 +185,23 @@ export function DeploymentsList({ onOpenSettings }: Props) {
   };
 
   useEffect(() => {
+    // Initial fetch
     fetchDeployments(INITIAL_LIMIT);
-    setupPolling(NORMAL_POLL_INTERVAL);
+
+    // Fetch when window becomes visible (panel opens)
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        fetchDeployments();
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
 
     return () => {
       if (pollIntervalRef.current) {
         clearInterval(pollIntervalRef.current);
       }
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
   }, []);
 
@@ -212,8 +237,12 @@ export function DeploymentsList({ onOpenSettings }: Props) {
         <span className="deployments-title">deployments</span>
 
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 4 }}>
-          <button className="icon-button" onClick={fetchDeployments}>
-            <RefreshCw style={{ width: 14, height: 14 }} />
+          <button className="icon-button" onClick={() => fetchDeployments()} disabled={isFetching}>
+            <RefreshCw style={{
+              width: 14,
+              height: 14,
+              animation: isFetching ? 'spin 1s linear infinite' : 'none'
+            }} />
           </button>
 
           <button className="icon-button" onClick={onOpenSettings}>

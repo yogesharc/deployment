@@ -107,30 +107,18 @@ pub fn setup_tray<R: Runtime>(app: &tauri::App<R>) -> Result<(), Box<dyn std::er
     Ok(())
 }
 
-/// Set tray icon to "building" state with project name
-pub fn set_tray_building<R: Runtime>(app: &AppHandle<R>, project_name: Option<&str>) {
+/// Set tray icon to "deploying" state
+pub fn set_tray_building<R: Runtime>(app: &AppHandle<R>, _project_name: Option<&str>) {
     if let Some(tray) = app.tray_by_id("main") {
-        let title = match project_name {
-            Some(name) => {
-                // Truncate long names
-                let display = if name.len() > 15 {
-                    format!("{}...", &name[..12])
-                } else {
-                    name.to_string()
-                };
-                format!("Building {}", display)
-            }
-            None => "Building...".to_string(),
-        };
-        let _ = tray.set_title(Some(&title));
-        let _ = tray.set_tooltip(Some(&title));
+        let _ = tray.set_title(Some("Deploying..."));
     }
 }
 
 /// Set tray icon to normal state
 pub fn set_tray_normal<R: Runtime>(app: &AppHandle<R>) {
     if let Some(tray) = app.tray_by_id("main") {
-        let _ = tray.set_title(None::<&str>);
+        // Use empty string to clear title - None might not work on macOS
+        let _ = tray.set_title(Some(""));
         let _ = tray.set_tooltip(Some("Deployments"));
     }
 }

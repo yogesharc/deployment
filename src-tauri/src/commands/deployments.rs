@@ -170,6 +170,9 @@ pub async fn list_all_deployments(limit: Option<u32>, state: State<'_, AppState>
 /// Update tray icon based on build status
 #[tauri::command]
 pub fn update_tray_status(is_building: bool, building_project: Option<String>, app: AppHandle) {
+    // Set global flag so background thread knows to start polling
+    crate::set_building_flag(is_building);
+
     if is_building {
         tray::set_tray_building(&app, building_project.as_deref());
     } else {
