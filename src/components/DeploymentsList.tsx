@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { RefreshCw, Settings, GitBranch, Loader2, Train } from 'lucide-react';
+import { RefreshCw, Settings, GitBranch, Loader2, Train, Copy, ExternalLink } from 'lucide-react';
+import { writeText } from '@tauri-apps/plugin-clipboard-manager';
 import './DeploymentsList.css';
 
 // Unified deployment from backend
@@ -17,6 +18,7 @@ interface UnifiedDeployment {
   serviceId: string | null;
   gitAuthorLogin: string | null;
   teamSlug: string | null;
+  accountId: string | null;
 }
 
 interface Props {
@@ -67,6 +69,12 @@ const INITIAL_LIMIT = 8;
 const LOAD_MORE_INCREMENT = 8;
 const BUILDING_POLL_INTERVAL = 10000; // 10 seconds when building
 
+interface ContextMenu {
+  x: number;
+  y: number;
+  deployment: UnifiedDeployment;
+}
+
 export function DeploymentsList({ onOpenSettings }: Props) {
   const [deployments, setDeployments] = useState<UnifiedDeployment[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -74,6 +82,9 @@ export function DeploymentsList({ onOpenSettings }: Props) {
   const [isFetching, setIsFetching] = useState(false);
   const [limit, setLimit] = useState(INITIAL_LIMIT);
   const [hasMore, setHasMore] = useState(true);
+  const [contextMenu, setContextMenu] = useState<ContextMenu | null>(null);
+  const [copyingId, setCopyingId] = useState<string | null>(null);
+  const [copyMessage, setCopyMessage] = useState<string>('');
   const previousStatusRef = useRef<Map<string, string>>(new Map());
   const isFirstFetchRef = useRef(true);
   const limitRef = useRef(INITIAL_LIMIT); // Keep limit in ref to avoid stale closure
@@ -205,7 +216,58 @@ export function DeploymentsList({ onOpenSettings }: Props) {
     };
   }, []);
 
-  const openDeployment = async (d: UnifiedDeployment) => {
+  const copyToClipboard = async (text: string): Promise<boolean> => {
+    // Try Tauri clipboard first
+    try {
+      await writeText(text);
+      return true;
+    } catch (e) {
+      console.log('Tauri clipboard failed, trying navigator:', e);
+    }
+    // Fallback to navigator clipboard
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch (e) {
+      console.log('Navigator clipboard failed:', e);
+    }
+    return false;
+  };
+
+  const copyLogs = async (d: UnifiedDeployment, isError: boolean = false) => {
+    setCopyingId(d.id);
+    setCopyMessage('Copying...');
+    try {
+      console.log('Fetching logs for deployment:', d.id, 'account:', d.accountId);
+      const logText = await invoke<string>('fetch_error_logs_text', {
+        deploymentId: d.id,
+        accountId: d.accountId
+      });
+      console.log('Logs fetched, length:', logText?.length);
+      if (logText && logText.length > 0) {
+        const success = await copyToClipboard(logText);
+        if (success) {
+          setCopyMessage(isError ? 'Copied errors' : 'Copied logs');
+          console.log('Logs copied to clipboard');
+        } else {
+          setCopyMessage('Copy failed');
+        }
+      } else {
+        setCopyMessage('No logs found');
+        console.log('No logs found');
+      }
+    } catch (err) {
+      console.error('Failed to copy logs:', err);
+      setCopyMessage('Failed to copy');
+    } finally {
+      setTimeout(() => {
+        setCopyingId(null);
+        setCopyMessage('');
+      }, 1500);
+    }
+  };
+
+  const openDeploymentUrl = async (d: UnifiedDeployment) => {
     let url: string;
     if (d.provider === 'railway') {
       url = 'https://railway.com/dashboard';
@@ -213,12 +275,10 @@ export function DeploymentsList({ onOpenSettings }: Props) {
         url = `https://railway.com/project/${d.projectId}`;
       }
     } else {
-      // Vercel - only open deployed URL if successful, otherwise open deployment page
-      const status = mapStatus(d.status);
-      if (status === 'READY' && d.url) {
+      // Vercel - open deployed URL if available
+      if (d.url) {
         url = d.url;
       } else {
-        // Open the Vercel deployment page in dashboard: /team/project/deployment-id
         url = `https://vercel.com/${d.teamSlug}/${d.name}/${d.id}`;
       }
     }
@@ -229,6 +289,55 @@ export function DeploymentsList({ onOpenSettings }: Props) {
       window.open(url, '_blank');
     }
   };
+
+  const openDeploymentPage = async (d: UnifiedDeployment) => {
+    let url: string;
+    if (d.provider === 'railway') {
+      url = 'https://railway.com/dashboard';
+      if (d.projectId) {
+        url = `https://railway.com/project/${d.projectId}`;
+      }
+    } else {
+      // Vercel deployment page
+      url = `https://vercel.com/${d.teamSlug}/${d.name}/${d.id}`;
+    }
+    try {
+      const opener = await import('@tauri-apps/plugin-opener');
+      await opener.openUrl(url);
+    } catch {
+      window.open(url, '_blank');
+    }
+  };
+
+  const handleClick = async (d: UnifiedDeployment) => {
+    const status = mapStatus(d.status);
+    if (status === 'ERROR') {
+      // For errors, copy error logs
+      await copyLogs(d, true);
+    } else if (status === 'READY') {
+      // For success, open the deployed URL
+      await openDeploymentUrl(d);
+    } else {
+      // For other states, open the deployment page
+      await openDeploymentPage(d);
+    }
+  };
+
+  const handleContextMenu = (e: React.MouseEvent, d: UnifiedDeployment) => {
+    e.preventDefault();
+    setContextMenu({ x: e.clientX, y: e.clientY, deployment: d });
+  };
+
+  const closeContextMenu = () => setContextMenu(null);
+
+  // Close context menu when clicking outside
+  useEffect(() => {
+    const handleClick = () => closeContextMenu();
+    if (contextMenu) {
+      document.addEventListener('click', handleClick);
+      return () => document.removeEventListener('click', handleClick);
+    }
+  }, [contextMenu]);
 
   return (
     <div className="deployments-container">
@@ -263,11 +372,15 @@ export function DeploymentsList({ onOpenSettings }: Props) {
           deployments.map(d => {
             const status = mapStatus(d.status);
             const isBuilding = status === 'BUILDING' || status === 'QUEUED';
+            const isError = status === 'ERROR';
+            const isCopying = copyingId === d.id;
             return (
               <div
                 key={`${d.provider}-${d.id}`}
-                className="deployment-item"
-                onClick={() => openDeployment(d)}
+                className={`deployment-item ${isCopying ? 'copying' : ''}`}
+                onClick={() => handleClick(d)}
+                onContextMenu={(e) => handleContextMenu(e, d)}
+                title={isError ? 'Click to copy error logs' : undefined}
               >
                 {/* Row 1: Status indicator + Commit title + Time */}
                 <div className="deployment-row-1">
@@ -279,7 +392,11 @@ export function DeploymentsList({ onOpenSettings }: Props) {
                     }}
                   />
                   <span className="commit-message">{d.commitMessage || d.name}</span>
-                  <span className="deploy-time">{formatTime(d.createdAt)}</span>
+                  {isCopying ? (
+                    <span className="copied-indicator">{copyMessage || 'Copying...'}</span>
+                  ) : (
+                    <span className="deploy-time">{formatTime(d.createdAt)}</span>
+                  )}
                 </div>
 
                 {/* Row 2: Branch + Provider icon + Project name + Avatar */}
@@ -334,6 +451,54 @@ export function DeploymentsList({ onOpenSettings }: Props) {
           </button>
         )}
       </div>
+
+      {/* Context Menu */}
+      {contextMenu && (
+        <div
+          className="context-menu"
+          style={{
+            position: 'fixed',
+            left: contextMenu.x,
+            top: contextMenu.y,
+          }}
+        >
+          {mapStatus(contextMenu.deployment.status) === 'READY' && contextMenu.deployment.url && (
+            <button
+              className="context-menu-item"
+              onClick={() => {
+                openDeploymentUrl(contextMenu.deployment);
+                closeContextMenu();
+              }}
+            >
+              <ExternalLink style={{ width: 12, height: 12 }} />
+              Open deployment URL
+            </button>
+          )}
+          <button
+            className="context-menu-item"
+            onClick={() => {
+              openDeploymentPage(contextMenu.deployment);
+              closeContextMenu();
+            }}
+          >
+            <ExternalLink style={{ width: 12, height: 12 }} />
+            Open {contextMenu.deployment.provider === 'railway' ? 'Railway' : 'Vercel'} dashboard
+          </button>
+          {contextMenu.deployment.provider === 'vercel' && (
+            <button
+              className="context-menu-item"
+              onClick={() => {
+                const isError = mapStatus(contextMenu.deployment.status) === 'ERROR';
+                copyLogs(contextMenu.deployment, isError);
+                closeContextMenu();
+              }}
+            >
+              <Copy style={{ width: 12, height: 12 }} />
+              {mapStatus(contextMenu.deployment.status) === 'ERROR' ? 'Copy errors' : 'Copy logs'}
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 }

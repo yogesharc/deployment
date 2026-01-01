@@ -22,6 +22,7 @@ pub struct UnifiedDeployment {
     pub service_id: Option<String>,
     pub git_author_login: Option<String>,  // GitHub username for avatar
     pub team_slug: Option<String>,  // Team/user slug for Vercel dashboard URLs
+    pub account_id: Option<String>,  // Account ID for fetching logs
 }
 
 #[tauri::command]
@@ -112,6 +113,7 @@ pub async fn list_all_deployments(limit: Option<u32>, state: State<'_, AppState>
                             service_id: None,
                             git_author_login: d.meta.as_ref().and_then(|m| m.git_author_login.clone()),
                             team_slug: Some(team_slug.clone()),
+                            account_id: Some(account.id.clone()),
                         });
                     }
                 }
@@ -146,6 +148,7 @@ pub async fn list_all_deployments(limit: Option<u32>, state: State<'_, AppState>
                             service_id: d.service_id.clone(),
                             git_author_login: None,  // Railway doesn't expose git author
                             team_slug: None,  // Not used for Railway
+                            account_id: Some(account.id.clone()),
                         });
                     }
                 }

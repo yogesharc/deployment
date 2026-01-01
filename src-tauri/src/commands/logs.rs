@@ -1,5 +1,5 @@
 use futures::StreamExt;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, State, Manager};
 use crate::commands::auth::get_stored_token;
 use crate::state::AppState;
 use crate::vercel::LogLine;
@@ -139,4 +139,85 @@ pub async fn fetch_deployment_logs(deployment_id: String, state: State<'_, AppSt
     }
 
     Ok(logs)
+}
+
+#[tauri::command]
+pub async fn fetch_error_logs_text(deployment_id: String, account_id: Option<String>, state: State<'_, AppState>) -> Result<String, String> {
+    // Get token for specific account if provided, otherwise use active account
+    let token = match account_id {
+        Some(id) => {
+            crate::commands::auth::get_account_token(id, state.clone())
+                .await?
+                .ok_or("Account not found")?
+        }
+        None => {
+            get_stored_token(state)
+                .await?
+                .ok_or("Not authenticated")?
+        }
+    };
+
+    let url = format!(
+        "https://api.vercel.com/v3/deployments/{}/events?build=1",
+        deployment_id
+    );
+
+    let client = reqwest::Client::new();
+    let response = client
+        .get(&url)
+        .header("Authorization", format!("Bearer {}", token))
+        .send()
+        .await
+        .map_err(|e| format!("Failed to fetch logs: {}", e))?;
+
+    if !response.status().is_success() {
+        return Err(format!("Failed to fetch logs: {}", response.status()));
+    }
+
+    let text = response
+        .text()
+        .await
+        .map_err(|e| format!("Failed to read response: {}", e))?;
+
+    let mut all_lines: Vec<String> = Vec::new();
+    let mut error_lines: Vec<String> = Vec::new();
+
+    // Try parsing as JSON array first (non-streaming response)
+    if let Ok(events) = serde_json::from_str::<Vec<serde_json::Value>>(&text) {
+        for event in events {
+            if let Some(log_text) = event.get("text").and_then(|t| t.as_str()) {
+                all_lines.push(log_text.to_string());
+                let lower = log_text.to_lowercase();
+                if lower.contains("error") || lower.contains("failed") || lower.contains("err!") {
+                    error_lines.push(log_text.to_string());
+                }
+            }
+        }
+    } else {
+        // Fallback to SSE format (streaming response)
+        for line in text.lines() {
+            if line.starts_with("data: ") {
+                let data = &line[6..];
+                if let Ok(event) = serde_json::from_str::<serde_json::Value>(data) {
+                    let log_text = event.get("payload")
+                        .and_then(|p| p.get("text").and_then(|t| t.as_str()))
+                        .or_else(|| event.get("text").and_then(|t| t.as_str()));
+
+                    if let Some(text) = log_text {
+                        all_lines.push(text.to_string());
+                        let lower = text.to_lowercase();
+                        if lower.contains("error") || lower.contains("failed") || lower.contains("err!") {
+                            error_lines.push(text.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if error_lines.is_empty() {
+        Ok(all_lines.join("\n"))
+    } else {
+        Ok(error_lines.join("\n"))
+    }
 }

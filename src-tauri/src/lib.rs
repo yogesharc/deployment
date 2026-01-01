@@ -38,6 +38,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_store::Builder::default().build())
+        .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_nspanel::init())
         .manage(AppState::new())
         .setup(|app| {
@@ -151,8 +152,9 @@ pub fn run() {
                     // Convert window to panel
                     let panel = window.to_panel().unwrap();
 
-                    // Set window level above menubar
-                    panel.set_level(NSMainMenuWindowLevel + 1);
+                    // Set window level high enough to show above fullscreen apps
+                    // kCGScreenSaverWindowLevel = 1000, which shows above fullscreen
+                    panel.set_level(1000);
 
                     // Set collection behavior to work with all spaces and fullscreen
                     panel.set_collection_behaviour(
@@ -205,6 +207,7 @@ pub fn run() {
             // Log commands
             stream_deployment_logs,
             fetch_deployment_logs,
+            fetch_error_logs_text,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
