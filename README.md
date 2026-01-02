@@ -3,13 +3,13 @@
 A minimal menubar app for tracking your Vercel and Railway deployments.
 
 ![Deployment App](https://img.shields.io/badge/platform-macOS-blue)
-![Version](https://img.shields.io/badge/version-0.2.0-green)
+![Version](https://img.shields.io/badge/version-0.2.1-green)
 
 ## Download
 
 ### macOS (Apple Silicon)
 
-Download the latest release: [Deployment_0.2.0_aarch64.dmg](https://github.com/yogesharc/deployment/releases/latest/download/Deployment_0.1.0_aarch64.dmg)
+Download the latest release: [Deployment_0.2.1_aarch64.dmg](https://github.com/yogesharc/deployment/releases/download/v0.2.1/Deployment_0.2.1_aarch64.dmg)
 
 1. Download the `.dmg` file
 2. Open it and drag `Deployment.app` to your Applications folder
