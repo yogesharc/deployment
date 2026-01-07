@@ -2,6 +2,8 @@
 
 A minimal menubar app for tracking your Vercel and Railway deployments.
 
+![Deployment Screenshot](deployment_screenshot.png)
+
 ![Deployment App](https://img.shields.io/badge/platform-macOS-blue)
 ![Version](https://img.shields.io/badge/version-0.2.1-green)
 
