@@ -1,5 +1,6 @@
 import { useEffect, useState, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import { RefreshCw, Settings, GitBranch, Loader2, Train, Copy, ExternalLink } from 'lucide-react';
 import { writeText } from '@tauri-apps/plugin-clipboard-manager';
 import './DeploymentsList.css';
@@ -208,11 +209,17 @@ export function DeploymentsList({ onOpenSettings }: Props) {
 
     document.addEventListener('visibilitychange', handleVisibilityChange);
 
+    // Listen for background polling refresh events from Rust backend
+    const unlistenPromise = listen('deployments-refresh', () => {
+      fetchDeployments();
+    });
+
     return () => {
       if (pollIntervalRef.current) {
         clearInterval(pollIntervalRef.current);
       }
       document.removeEventListener('visibilitychange', handleVisibilityChange);
+      unlistenPromise.then(fn => fn());
     };
   }, []);
 

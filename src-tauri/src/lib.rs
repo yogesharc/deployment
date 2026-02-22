@@ -6,9 +6,8 @@ mod vercel;
 
 use commands::*;
 use state::AppState;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
 use tokio::runtime::Runtime;
 
 // Global flag to signal background thread that a build is in progress
@@ -51,47 +50,31 @@ pub fn run() {
                 app.set_activation_policy(tauri::ActivationPolicy::Accessory);
             }
 
-            // Background thread to poll for build status when a build is detected
+            // Background thread: polls every 30s (or 10s when building)
+            // Emits "deployments-refresh" event so the frontend updates automatically
             let app_handle = app.handle().clone();
             std::thread::spawn(move || {
                 let rt = Runtime::new().unwrap();
                 rt.block_on(async {
+                    // Wait a bit on startup for accounts to initialize
+                    tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+
                     loop {
-                        // Only poll when building flag is set
-                        if get_building_flag() {
-                            eprintln!("[BG] Building flag is set, checking status...");
-                            let state = app_handle.state::<AppState>();
+                        let state = app_handle.state::<AppState>();
 
-                            if state.is_initialized() {
-                                let accounts = state.get_all_accounts();
-                                let mut has_building = false;
+                        if state.is_initialized() {
+                            let accounts = state.get_all_accounts();
+                            let mut has_building = false;
 
-                                'outer: for account in accounts {
-                                    match account.provider.as_str() {
-                                        "vercel" => {
-                                            if let Ok(client) = vercel::create_client(&account.token) {
-                                                if let Ok(deployments) = client.list_deployments(None, 5).await {
-                                                    for d in deployments {
-                                                        if let Some(s) = d.state.as_ref().or(d.ready_state.as_ref()) {
-                                                            let status = format!("{:?}", s).to_uppercase();
-                                                            eprintln!("[BG] Vercel deployment status: {}", status);
-                                                            if status == "BUILDING" || status == "QUEUED" || status == "INITIALIZING" {
-                                                                has_building = true;
-                                                                break 'outer;
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                        "railway" => {
-                                            let token_type = if account.scope_type == "project" { "project" } else { "workspace" };
-                                            if let Ok(client) = railway::create_client_with_type(&account.token, token_type) {
-                                                if let Ok(deployments) = client.list_deployments(None, None, None, 5).await {
-                                                    for d in deployments {
-                                                        let status = format!("{:?}", d.status).to_uppercase();
-                                                        eprintln!("[BG] Railway deployment status: {}", status);
-                                                        if status == "BUILDING" || status == "DEPLOYING" || status == "INITIALIZING" {
+                            'outer: for account in &accounts {
+                                match account.provider.as_str() {
+                                    "vercel" => {
+                                        if let Ok(client) = vercel::create_client(&account.token) {
+                                            if let Ok(deployments) = client.list_deployments(None, 5).await {
+                                                for d in deployments {
+                                                    if let Some(s) = d.state.as_ref().or(d.ready_state.as_ref()) {
+                                                        let status = format!("{:?}", s).to_uppercase();
+                                                        if status == "BUILDING" || status == "QUEUED" || status == "INITIALIZING" {
                                                             has_building = true;
                                                             break 'outer;
                                                         }
@@ -99,25 +82,45 @@ pub fn run() {
                                                 }
                                             }
                                         }
-                                        _ => {}
                                     }
-                                }
-
-                                eprintln!("[BG] has_building = {}", has_building);
-                                // Build finished - clear tray
-                                if !has_building {
-                                    eprintln!("[BG] Clearing tray text!");
-                                    set_building_flag(false);
-                                    tray::set_tray_normal(&app_handle);
+                                    "railway" => {
+                                        let token_type = if account.scope_type == "project" { "project" } else { "workspace" };
+                                        if let Ok(client) = railway::create_client_with_type(&account.token, token_type) {
+                                            if let Ok(deployments) = client.list_deployments(None, None, None, 5).await {
+                                                for d in deployments {
+                                                    let status = format!("{:?}", d.status).to_uppercase();
+                                                    if status == "BUILDING" || status == "DEPLOYING" || status == "INITIALIZING" {
+                                                        has_building = true;
+                                                        break 'outer;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    _ => {}
                                 }
                             }
 
-                            // Poll every 10s while building
-                            tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
-                        } else {
-                            // Not building - just sleep and check flag periodically
-                            tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+                            // Update tray + building flag
+                            if has_building {
+                                if !get_building_flag() {
+                                    eprintln!("[BG] New build detected, setting tray");
+                                    set_building_flag(true);
+                                    tray::set_tray_building(&app_handle, None);
+                                }
+                            } else if get_building_flag() {
+                                eprintln!("[BG] Build finished, clearing tray");
+                                set_building_flag(false);
+                                tray::set_tray_normal(&app_handle);
+                            }
+
+                            // Tell frontend to refresh its list
+                            let _ = app_handle.emit("deployments-refresh", ());
                         }
+
+                        // 10s when building, 30s when idle
+                        let interval = if get_building_flag() { 10 } else { 30 };
+                        tokio::time::sleep(tokio::time::Duration::from_secs(interval)).await;
                     }
                 });
             });

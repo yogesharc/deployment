@@ -82,7 +82,8 @@ pub fn setup_tray<R: Runtime>(app: &tauri::App<R>) -> Result<(), Box<dyn std::er
                                 }
                             }
 
-                            // Show panel and make it key window
+                            // Restore window level before showing (panel.show() doesn't preserve it)
+                            panel.set_level(1000);
                             panel.show();
                         }
                     }
