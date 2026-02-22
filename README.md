@@ -15,7 +15,6 @@ Download the latest release: [Deployment_0.2.1_aarch64.dmg](https://github.com/y
 
 1. Download the `.dmg` file
 2. Open it and drag `Deployment.app` to your Applications folder
-3. On first launch, right-click the app and select "Open" (required for unsigned apps)
 
 ## Features
 
